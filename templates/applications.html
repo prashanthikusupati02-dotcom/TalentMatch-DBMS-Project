@@ -1,0 +1,49 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Applications</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f2f5fa; margin: 0; }
+        header { background: #17365d; color: white; padding: 22px; text-align: center; }
+        nav { background: #244b78; padding: 14px; text-align: center; }
+        nav a { color: white; margin: 0 14px; text-decoration: none; }
+        main { max-width: 1000px; margin: 28px auto; padding: 0 18px; }
+        table { width: 100%; background: white; border-collapse: collapse; }
+        th, td { padding: 12px; border: 1px solid #dce2eb; text-align: left; }
+        th { background: #dce8f5; }
+    </style>
+</head>
+<body>
+    <header><h1>Job Applications</h1></header>
+    <nav>
+        <a href="/">Available Jobs</a>
+        <a href="/matches">Candidate Matches</a>
+        <a href="/applications">Applications</a>
+    </nav>
+
+    <main>
+        <h2>Submitted Applications</h2>
+        <table>
+            <tr>
+                <th>ID</th>
+                <th>Candidate</th>
+                <th>Job</th>
+                <th>Applied At</th>
+                <th>Status</th>
+            </tr>
+            {% for item in applications %}
+            <tr>
+                <td>{{ item.application_id }}</td>
+                <td>{{ item.candidate_name }}</td>
+                <td>{{ item.job_title }}</td>
+                <td>{{ item.applied_at }}</td>
+                <td>{{ item.status }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </main>
+</body>
+</html>

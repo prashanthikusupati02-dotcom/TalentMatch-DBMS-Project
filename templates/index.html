@@ -1,0 +1,82 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Intelligent Job Matching System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f2f5fa;
+            margin: 0;
+            color: #243047;
+        }
+        header {
+            background: #17365d;
+            color: white;
+            padding: 24px;
+            text-align: center;
+        }
+        nav {
+            background: #244b78;
+            padding: 14px;
+            text-align: center;
+        }
+        nav a {
+            color: white;
+            margin: 0 14px;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        main {
+            max-width: 1000px;
+            margin: 28px auto;
+            padding: 0 18px;
+        }
+        .job {
+            background: white;
+            padding: 22px;
+            margin-bottom: 18px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px #00000012;
+        }
+        .job h2 { color: #17365d; }
+        .details { color: #586579; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Intelligent Job Matching System</h1>
+        <p>Find opportunities that match your skills and experience</p>
+    </header>
+
+    <nav>
+        <a href="/">Available Jobs</a>
+        <a href="/matches">Candidate Matches</a>
+        <a href="/applications">Applications</a>
+    </nav>
+
+    <main>
+        <h2>Available Jobs</h2>
+
+        {% if jobs %}
+            {% for job in jobs %}
+            <section class="job">
+                <h2>{{ job.title }}</h2>
+                <p>{{ job.description or "No description available." }}</p>
+                <p class="details">
+                    <strong>Company:</strong> {{ job.company_name }}<br>
+                    <strong>Location:</strong> {{ job.location or "Not specified" }}<br>
+                    <strong>Required experience:</strong>
+                    {{ job.required_experience }} years<br>
+                    <strong>Expiry date:</strong> {{ job.expiry_date }}
+                </p>
+            </section>
+            {% endfor %}
+        {% else %}
+            <p>No active jobs are currently available.</p>
+        {% endif %}
+    </main>
+</body>
+</html>
