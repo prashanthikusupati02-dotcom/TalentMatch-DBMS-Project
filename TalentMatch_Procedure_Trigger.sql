@@ -60,3 +60,35 @@ END //
 
 DELIMITER ;
 ```
+DELIMITER //
+
+CREATE FUNCTION Get_Skill_Match_Percentage(
+    p_candidate_id INT,
+    p_job_id INT
+)
+RETURNS DECIMAL(5,2)
+DETERMINISTIC
+READS SQL DATA
+BEGIN
+    DECLARE total_skills INT DEFAULT 0;
+    DECLARE matched_skills INT DEFAULT 0;
+
+    SELECT COUNT(*) INTO total_skills
+    FROM Job_Skill
+    WHERE job_id = p_job_id;
+
+    SELECT COUNT(*) INTO matched_skills
+    FROM Job_Skill js
+    INNER JOIN Candidate_Skill cs
+        ON js.skill_id = cs.skill_id
+    WHERE js.job_id = p_job_id
+      AND cs.candidate_id = p_candidate_id;
+
+    IF total_skills = 0 THEN
+        RETURN 0.00;
+    END IF;
+
+    RETURN ROUND(matched_skills * 100.0 / total_skills, 2);
+END //
+
+DELIMITER ;
