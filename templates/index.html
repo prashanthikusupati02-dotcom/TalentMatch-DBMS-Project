@@ -1,10 +1,10 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Intelligent Job Matching System</title>
+
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -12,28 +12,70 @@
             margin: 0;
             color: #243047;
         }
+
         header {
             background: #17365d;
             color: white;
             padding: 24px;
             text-align: center;
         }
+
         nav {
             background: #244b78;
             padding: 14px;
             text-align: center;
         }
+
         nav a {
             color: white;
             margin: 0 14px;
             text-decoration: none;
             font-weight: bold;
         }
+
         main {
             max-width: 1000px;
             margin: 28px auto;
             padding: 0 18px;
         }
+
+        .search-box {
+            background: white;
+            padding: 24px;
+            margin-bottom: 28px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px #00000012;
+        }
+
+        .search-box input {
+            width: 75%;
+            padding: 12px;
+            border: 1px solid #ccd4df;
+            border-radius: 6px;
+            font-size: 15px;
+        }
+
+        .search-box button {
+            padding: 12px 20px;
+            background: #17365d;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 15px;
+        }
+
+        .search-box button:hover {
+            background: #244b78;
+        }
+
+        .search-result {
+            background: #eef3fa;
+            padding: 16px;
+            margin-top: 14px;
+            border-radius: 8px;
+        }
+
         .job {
             background: white;
             padding: 22px;
@@ -41,11 +83,36 @@
             border-radius: 10px;
             box-shadow: 0 2px 8px #00000012;
         }
-        .job h2 { color: #17365d; }
-        .details { color: #586579; }
+
+        .job h2 {
+            color: #17365d;
+        }
+
+        .details {
+            color: #586579;
+        }
+
+        #searchMessage {
+            margin-top: 15px;
+            color: #586579;
+        }
+
+        @media (max-width: 600px) {
+            .search-box input {
+                width: 100%;
+                box-sizing: border-box;
+                margin-bottom: 10px;
+            }
+
+            .search-box button {
+                width: 100%;
+            }
+        }
     </style>
 </head>
+
 <body>
+
     <header>
         <h1>Intelligent Job Matching System</h1>
         <p>Find opportunities that match your skills and experience</p>
@@ -55,16 +122,41 @@
         <a href="/">Available Jobs</a>
         <a href="/matches">Candidate Matches</a>
         <a href="/applications">Applications</a>
+        <a href="/logout">Logout</a>
     </nav>
 
     <main>
+
+        <section class="search-box">
+            <h2>AI-Powered Semantic Job Search</h2>
+
+            <p>
+                Describe the type of job you are looking for
+                using natural language.
+            </p>
+
+            <input
+                type="text"
+                id="jobQuery"
+                placeholder="Example: I want a job involving Python and web development"
+            >
+
+            <button onclick="searchJobs()">Search Jobs</button>
+
+            <p id="searchMessage"></p>
+
+            <div id="searchResults"></div>
+        </section>
+
         <h2>Available Jobs</h2>
 
         {% if jobs %}
             {% for job in jobs %}
             <section class="job">
                 <h2>{{ job.title }}</h2>
+
                 <p>{{ job.description or "No description available." }}</p>
+
                 <p class="details">
                     <strong>Company:</strong> {{ job.company_name }}<br>
                     <strong>Location:</strong> {{ job.location or "Not specified" }}<br>
@@ -77,6 +169,96 @@
         {% else %}
             <p>No active jobs are currently available.</p>
         {% endif %}
+
     </main>
+
+    <script>
+        async function searchJobs() {
+
+            const query = document.getElementById("jobQuery").value.trim();
+            const message = document.getElementById("searchMessage");
+            const resultsDiv = document.getElementById("searchResults");
+
+            resultsDiv.replaceChildren();
+
+            if (!query) {
+                message.textContent = "Please enter a job description.";
+                return;
+            }
+
+            message.textContent = "Searching for matching jobs...";
+
+            try {
+
+                const response = await fetch("/api/jobs/semantic-search", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    credentials: "same-origin",
+                    body: JSON.stringify({
+                        query: query
+                    })
+                });
+
+                const contentType = response.headers.get("content-type") || "";
+
+                if (!contentType.includes("application/json")) {
+                    message.textContent =
+                        "Please log in with a Candidate account to use semantic search.";
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    message.textContent = data.error || "Search failed.";
+                    return;
+                }
+
+                if (data.total_results === 0) {
+                    message.textContent = "No matching jobs found.";
+                    return;
+                }
+
+                message.textContent =
+                    data.total_results + " matching jobs found.";
+
+                data.results.forEach(job => {
+
+                    const card = document.createElement("div");
+                    card.className = "search-result";
+
+                    const title = document.createElement("h3");
+                    title.textContent = job.title;
+
+                    const description = document.createElement("p");
+                    description.textContent = job.description || "";
+
+                    const location = document.createElement("p");
+                    location.textContent = "Location: " + (job.location || "Not specified");
+
+                    const score = document.createElement("p");
+                    score.textContent =
+                        "Similarity score: " + job.score.toFixed(4);
+
+                    card.append(title, description, location, score);
+                    resultsDiv.appendChild(card);
+                });
+
+            } catch (error) {
+
+                message.textContent =
+                    "Unable to connect to the job search service.";
+            }
+        }
+
+        document.getElementById("jobQuery").addEventListener("keydown", function(event) {
+            if (event.key === "Enter") {
+                searchJobs();
+            }
+        });
+    </script>
+
 </body>
 </html>
