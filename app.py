@@ -10,6 +10,7 @@ from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 from bson import ObjectId
 from sentence_transformers import SentenceTransformer
+
 from flask import (
     Flask, render_template, request,
     redirect, url_for, flash, make_response, jsonify
@@ -41,9 +42,11 @@ mongo_client = MongoClient(
 
 mongo_db = mongo_client["talentmatch_db"] if mongo_client else None
 
+
 # ---------------- SEMANTIC SEARCH MODEL ----------------
 
 embedding_model = None
+
 
 def get_embedding_model():
     global embedding_model
@@ -52,6 +55,8 @@ def get_embedding_model():
         embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
     return embedding_model
+
+
 # ---------------- MYSQL CONNECTION ----------------
 
 def get_db_connection():
@@ -102,6 +107,7 @@ def token_required(roles=None):
                 )
 
             except jwt.ExpiredSignatureError:
+
                 flash("Your session has expired. Please log in again.")
 
                 response = make_response(
@@ -112,6 +118,7 @@ def token_required(roles=None):
                 return response
 
             except jwt.InvalidTokenError:
+
                 flash("Invalid login session.")
 
                 response = make_response(
@@ -159,6 +166,7 @@ def home():
         return render_template("index.html", jobs=jobs)
 
     except Error as error:
+        app.logger.exception("Home page database error.")
         return f"Database connection error: {error}", 500
 
     finally:
@@ -263,7 +271,7 @@ def register():
             if connection:
                 connection.rollback()
 
-            app.logger.error("Registration database error: %s", error)
+            app.logger.exception("Registration database error.")
             flash("Registration could not be completed.")
 
         finally:
@@ -295,6 +303,7 @@ def register():
         )
 
     except Error as error:
+        app.logger.exception("Company retrieval error.")
         return f"Database connection error: {error}", 500
 
     finally:
@@ -370,9 +379,9 @@ def login():
 
             flash("Invalid email, password or account type.")
 
-        except Error as error:
+        except Error:
 
-            app.logger.error("Login database error: %s", error)
+            app.logger.exception("Login database error.")
             flash("Login could not be completed.")
 
         finally:
@@ -429,6 +438,7 @@ def matches(current_user):
         )
 
     except Error as error:
+        app.logger.exception("Job matches database error.")
         return f"Database connection error: {error}", 500
 
     finally:
@@ -472,6 +482,7 @@ def applications(current_user):
         )
 
     except Error as error:
+        app.logger.exception("Applications database error.")
         return f"Database connection error: {error}", 500
 
     finally:
@@ -509,13 +520,11 @@ def candidate_notes(current_user):
 
     try:
         notes_collection = mongo_db["candidate_notes"]
-
         candidate_id = current_user["user_id"]
 
         if request.method == "POST":
 
             data = request.get_json(silent=True) or {}
-
             note = data.get("note", "").strip()
 
             if not note:
@@ -556,20 +565,18 @@ def candidate_notes(current_user):
 
     except PyMongoError:
 
-        app.logger.exception(
-            "MongoDB notes operation failed."
-        )
+        app.logger.exception("MongoDB notes operation failed.")
 
         return jsonify({
             "error": "Could not access candidate notes."
         }), 500
 
 
-# ---------------- MONGODB: DELETE CANDIDATE NOTE ----------------
+# ---------------- MONGODB: UPDATE / DELETE CANDIDATE NOTE ----------------
 
 @app.route(
     "/api/candidate/notes/<note_id>",
-    methods=["DELETE"]
+    methods=["PUT", "DELETE"]
 )
 @token_required(roles=["candidate"])
 def delete_candidate_note(current_user, note_id):
@@ -585,10 +592,43 @@ def delete_candidate_note(current_user, note_id):
         }), 400
 
     try:
-        result = mongo_db["candidate_notes"].delete_one({
+        notes_collection = mongo_db["candidate_notes"]
+
+        note_filter = {
             "_id": ObjectId(note_id),
             "candidate_id": current_user["user_id"]
-        })
+        }
+
+        if request.method == "PUT":
+
+            data = request.get_json(silent=True) or {}
+            note = data.get("note", "").strip()
+
+            if not note:
+                return jsonify({
+                    "error": "Note cannot be empty."
+                }), 400
+
+            if len(note) > 2000:
+                return jsonify({
+                    "error": "Note cannot exceed 2000 characters."
+                }), 400
+
+            result = notes_collection.update_one(
+                note_filter,
+                {"$set": {"note": note}}
+            )
+
+            if result.matched_count == 0:
+                return jsonify({
+                    "error": "Note not found."
+                }), 404
+
+            return jsonify({
+                "message": "Note updated successfully."
+            }), 200
+
+        result = notes_collection.delete_one(note_filter)
 
         if result.deleted_count == 0:
             return jsonify({
@@ -601,13 +641,12 @@ def delete_candidate_note(current_user, note_id):
 
     except PyMongoError:
 
-        app.logger.exception(
-            "MongoDB note deletion failed."
-        )
+        app.logger.exception("MongoDB note operation failed.")
 
         return jsonify({
-            "error": "Could not delete the note."
+            "error": "Could not process candidate note."
         }), 500
+
 
 # ---------------- MONGODB: SEMANTIC JOB SEARCH ----------------
 
@@ -635,7 +674,6 @@ def semantic_job_search(current_user):
 
     try:
         model = get_embedding_model()
-
         query_embedding = model.encode(query).tolist()
 
         pipeline = [
@@ -674,9 +712,7 @@ def semantic_job_search(current_user):
 
     except PyMongoError:
 
-        app.logger.exception(
-            "Semantic job search MongoDB error."
-        )
+        app.logger.exception("Semantic search MongoDB error.")
 
         return jsonify({
             "error": "Semantic search is temporarily unavailable."
@@ -684,13 +720,13 @@ def semantic_job_search(current_user):
 
     except Exception:
 
-        app.logger.exception(
-            "Semantic job search failed."
-        )
+        app.logger.exception("Semantic job search failed.")
 
         return jsonify({
             "error": "Could not complete semantic job search."
         }), 500
+
+
 # ---------------- APPLICATION START ----------------
 
 if __name__ == "__main__":
