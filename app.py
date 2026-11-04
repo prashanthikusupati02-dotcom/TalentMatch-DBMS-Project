@@ -9,7 +9,7 @@ import mysql.connector
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 from bson import ObjectId
-
+from sentence_transformers import SentenceTransformer
 from flask import (
     Flask, render_template, request,
     redirect, url_for, flash, make_response, jsonify
@@ -41,7 +41,17 @@ mongo_client = MongoClient(
 
 mongo_db = mongo_client["talentmatch_db"] if mongo_client else None
 
+# ---------------- SEMANTIC SEARCH MODEL ----------------
 
+embedding_model = None
+
+def get_embedding_model():
+    global embedding_model
+
+    if embedding_model is None:
+        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    return embedding_model
 # ---------------- MYSQL CONNECTION ----------------
 
 def get_db_connection():
@@ -599,7 +609,88 @@ def delete_candidate_note(current_user, note_id):
             "error": "Could not delete the note."
         }), 500
 
+# ---------------- MONGODB: SEMANTIC JOB SEARCH ----------------
 
+@app.route("/api/jobs/semantic-search", methods=["POST"])
+@token_required(roles=["candidate"])
+def semantic_job_search(current_user):
+
+    if mongo_db is None:
+        return jsonify({
+            "error": "MongoDB is not configured."
+        }), 503
+
+    data = request.get_json(silent=True) or {}
+    query = data.get("query", "").strip()
+
+    if not query:
+        return jsonify({
+            "error": "Please enter a job search query."
+        }), 400
+
+    if len(query) > 500:
+        return jsonify({
+            "error": "Search query cannot exceed 500 characters."
+        }), 400
+
+    try:
+        model = get_embedding_model()
+
+        query_embedding = model.encode(query).tolist()
+
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": "job_vector_index",
+                    "path": "embedding",
+                    "queryVector": query_embedding,
+                    "numCandidates": 20,
+                    "limit": 5
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "job_id": 1,
+                    "title": 1,
+                    "description": 1,
+                    "location": 1,
+                    "score": {
+                        "$meta": "vectorSearchScore"
+                    }
+                }
+            }
+        ]
+
+        results = list(
+            mongo_db["job_vectors"].aggregate(pipeline)
+        )
+
+        return jsonify({
+            "query": query,
+            "total_results": len(results),
+            "results": results
+        }), 200
+
+    except PyMongoError:
+
+        app.logger.exception(
+            "Semantic job search MongoDB error."
+        )
+
+        return jsonify({
+            "error": "Semantic search is temporarily unavailable."
+        }), 500
+
+    except Exception:
+
+        app.logger.exception(
+            "Semantic job search failed."
+        )
+
+        return jsonify({
+            "error": "Could not complete semantic job search."
+        }), 500
 # ---------------- APPLICATION START ----------------
 
 if __name__ == "__main__":

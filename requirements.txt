@@ -2,3 +2,4 @@ Flask
 mysql-connector-python
 PyJWT
 pymongo[srv]
+sentence-transformers
