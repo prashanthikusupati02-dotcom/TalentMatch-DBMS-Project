@@ -1,9 +1,24 @@
+
 import os
-from flask import Flask, render_template
+import datetime
+from functools import wraps
+
+import jwt
 import mysql.connector
+
+from flask import (
+    Flask, render_template, request,
+    redirect, url_for, flash, make_response, jsonify
+)
 from mysql.connector import Error
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
+
+app.config["SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRY_HOURS = 2
 
 
 def get_db_connection():
@@ -14,22 +29,64 @@ def get_db_connection():
         database="job_matching_db"
     )
 
+
+def generate_token(user_id, email, role):
+    payload = {
+        "user_id": user_id,
+        "email": email,
+        "role": role,
+        "exp": datetime.datetime.now(datetime.timezone.utc)
+               + datetime.timedelta(hours=JWT_EXPIRY_HOURS)
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def token_required(roles=None):
+    def decorator(function):
+        @wraps(function)
+        def wrapper(*args, **kwargs):
+            token = request.cookies.get("access_token")
+
+            if not token:
+                flash("Please log in first.")
+                return redirect(url_for("login"))
+
+            try:
+                data = jwt.decode(
+                    token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM]
+                )
+            except jwt.ExpiredSignatureError:
+                flash("Your session has expired. Please log in again.")
+                response = make_response(redirect(url_for("login")))
+                response.delete_cookie("access_token")
+                return response
+            except jwt.InvalidTokenError:
+                flash("Invalid login session.")
+                response = make_response(redirect(url_for("login")))
+                response.delete_cookie("access_token")
+                return response
+
+            if roles and data["role"] not in roles:
+                return "Access denied: insufficient permissions.", 403
+
+            return function(data, *args, **kwargs)
+
+        return wrapper
+    return decorator
+
+
 @app.route("/")
 def home():
     connection = None
+    cursor = None
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
         cursor.execute("""
-            SELECT
-                j.job_id,
-                j.title,
-                j.description,
-                j.required_experience,
-                j.location,
-                j.expiry_date,
-                c.company_name
+            SELECT j.job_id, j.title, j.description,
+                   j.required_experience, j.location,
+                   j.expiry_date, c.company_name
             FROM Job j
             JOIN Recruiter r ON j.recruiter_id = r.recruiter_id
             JOIN Company c ON r.company_id = c.company_id
@@ -42,16 +99,183 @@ def home():
 
     except Error as error:
         return f"Database connection error: {error}", 500
-
     finally:
-        if connection and connection.is_connected():
+        if cursor:
             cursor.close()
+        if connection and connection.is_connected():
             connection.close()
 
 
-@app.route("/matches")
-def matches():
+@app.route("/register", methods=["GET", "POST"])
+def register():
     connection = None
+    cursor = None
+
+    if request.method == "POST":
+        role = request.form.get("role")
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if role not in ("candidate", "recruiter"):
+            flash("Invalid account type.")
+            return redirect(url_for("register"))
+
+        if not name or not email or len(password) < 8:
+            flash("Enter valid details. Password must be at least 8 characters.")
+            return redirect(url_for("register"))
+
+        if password != confirm_password:
+            flash("Passwords do not match.")
+            return redirect(url_for("register"))
+
+        password_hash = generate_password_hash(password)
+
+        try:
+            connection = get_db_connection()
+            cursor = connection.cursor()
+
+            if role == "candidate":
+                experience = request.form.get("experience_years", "0")
+                try:
+                    experience = float(experience)
+                    if not 0 <= experience <= 99.9:
+                        raise ValueError
+                except ValueError:
+                    flash("Enter valid experience between 0 and 99.9.")
+                    return redirect(url_for("register"))
+
+                cursor.execute("""
+                    INSERT INTO Candidate
+                    (name, email, password_hash, experience_years)
+                    VALUES (%s, %s, %s, %s)
+                """, (name, email, password_hash, experience))
+
+            else:
+                company_id = request.form.get("company_id")
+                if not company_id or not company_id.isdigit():
+                    flash("Please select a valid company.")
+                    return redirect(url_for("register"))
+
+                cursor.execute(
+                    "SELECT company_id FROM Company WHERE company_id = %s",
+                    (int(company_id),)
+                )
+                if not cursor.fetchone():
+                    flash("Selected company does not exist.")
+                    return redirect(url_for("register"))
+
+                cursor.execute("""
+                    INSERT INTO Recruiter
+                    (company_id, name, email, password_hash)
+                    VALUES (%s, %s, %s, %s)
+                """, (int(company_id), name, email, password_hash))
+
+            connection.commit()
+            flash("Registration successful. Please log in.")
+            return redirect(url_for("login"))
+
+        except mysql.connector.IntegrityError:
+            if connection:
+                connection.rollback()
+            flash("This email is already registered.")
+        except Error as error:
+            if connection:
+                connection.rollback()
+            app.logger.error("Registration database error: %s", error)
+            flash("Registration could not be completed.")
+        finally:
+            if cursor:
+                cursor.close()
+            if connection and connection.is_connected():
+                connection.close()
+
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("SELECT company_id, company_name FROM Company ORDER BY company_name")
+        companies = cursor.fetchall()
+        return render_template("register.html", companies=companies)
+    except Error as error:
+        return f"Database connection error: {error}", 500
+    finally:
+        if cursor:
+            cursor.close()
+        if connection and connection.is_connected():
+            connection.close()
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        role = request.form.get("role")
+
+        if role not in ("candidate", "recruiter"):
+            flash("Invalid account type.")
+            return redirect(url_for("login"))
+
+        table = "Candidate" if role == "candidate" else "Recruiter"
+        id_column = "candidate_id" if role == "candidate" else "recruiter_id"
+
+        connection = None
+        cursor = None
+        try:
+            connection = get_db_connection()
+            cursor = connection.cursor(dictionary=True)
+
+            cursor.execute(
+                f"SELECT {id_column} AS user_id, email, password_hash "
+                f"FROM {table} WHERE email = %s",
+                (email,)
+            )
+            user = cursor.fetchone()
+
+            if user and check_password_hash(user["password_hash"], password):
+                token = generate_token(user["user_id"], user["email"], role)
+
+                response = make_response(redirect(url_for("home")))
+                response.set_cookie(
+                    "access_token",
+                    token,
+                    httponly=True,
+                    secure=False,
+                    samesite="Lax",
+                    max_age=JWT_EXPIRY_HOURS * 3600
+                )
+                return response
+
+            flash("Invalid email, password or account type.")
+
+        except Error as error:
+            app.logger.error("Login database error: %s", error)
+            flash("Login could not be completed.")
+        finally:
+            if cursor:
+                cursor.close()
+            if connection and connection.is_connected():
+                connection.close()
+
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    response = make_response(redirect(url_for("login")))
+    response.delete_cookie("access_token")
+    flash("You have been logged out.")
+    return response
+
+
+@app.route("/matches")
+@token_required(roles=["candidate", "recruiter"])
+def matches(current_user):
+    connection = None
+    cursor = None
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
@@ -67,27 +291,27 @@ def matches():
 
     except Error as error:
         return f"Database connection error: {error}", 500
-
     finally:
-        if connection and connection.is_connected():
+        if cursor:
             cursor.close()
+        if connection and connection.is_connected():
             connection.close()
 
 
 @app.route("/applications")
-def applications():
+@token_required(roles=["recruiter"])
+def applications(current_user):
     connection = None
+    cursor = None
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
         cursor.execute("""
-            SELECT
-                a.application_id,
-                c.name AS candidate_name,
-                j.title AS job_title,
-                a.applied_at,
-                a.status
+            SELECT a.application_id,
+                   c.name AS candidate_name,
+                   j.title AS job_title,
+                   a.applied_at, a.status
             FROM Application a
             JOIN Candidate c ON a.candidate_id = c.candidate_id
             JOIN Job j ON a.job_id = j.job_id
@@ -99,12 +323,25 @@ def applications():
 
     except Error as error:
         return f"Database connection error: {error}", 500
-
     finally:
-        if connection and connection.is_connected():
+        if cursor:
             cursor.close()
+        if connection and connection.is_connected():
             connection.close()
 
 
+@app.route("/api/me")
+@token_required()
+def current_user(current_user):
+    return jsonify({
+        "user_id": current_user["user_id"],
+        "email": current_user["email"],
+        "role": current_user["role"]
+    })
+
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    if not JWT_SECRET_KEY:
+        raise RuntimeError("JWT_SECRET_KEY environment variable is missing.")
+
+    app.run(debug=False)

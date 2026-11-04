@@ -1,0 +1,160 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Register - TalentMatch</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f2f5fa;
+            margin: 0;
+            color: #243047;
+        }
+        header {
+            background: #17365d;
+            color: white;
+            padding: 22px;
+            text-align: center;
+        }
+        .container {
+            max-width: 450px;
+            margin: 35px auto;
+            padding: 30px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px #00000015;
+        }
+        h2 {
+            text-align: center;
+            color: #17365d;
+        }
+        label {
+            display: block;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+        input, select {
+            width: 100%;
+            padding: 11px;
+            margin-top: 7px;
+            box-sizing: border-box;
+            border: 1px solid #ccd3df;
+            border-radius: 5px;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 22px;
+            background: #17365d;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #244b78;
+        }
+        .message {
+            color: #b42318;
+            text-align: center;
+        }
+        .link {
+            text-align: center;
+            margin-top: 20px;
+        }
+        a {
+            color: #244b78;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>TalentMatch</h1>
+    <p>Create your account</p>
+</header>
+
+<div class="container">
+    <h2>Register</h2>
+
+    {% with messages = get_flashed_messages() %}
+        {% for message in messages %}
+            <p class="message">{{ message }}</p>
+        {% endfor %}
+    {% endwith %}
+
+    <form action="/register" method="POST">
+        <label>Register as</label>
+        <select name="role" id="role" required>
+            <option value="candidate">Candidate</option>
+            <option value="recruiter">Recruiter</option>
+        </select>
+
+        <label>Full Name</label>
+        <input type="text" name="name" maxlength="100" required>
+
+        <label>Email</label>
+        <input type="email" name="email" maxlength="150" required>
+
+        <div id="experience-field">
+            <label>Experience (years)</label>
+            <input type="number" name="experience_years"
+                   min="0" max="99.9" step="0.1" value="0">
+        </div>
+
+        <div id="company-field" class="hidden">
+            <label>Select Company</label>
+            <select name="company_id" id="company_id" disabled>
+                {% for company in companies %}
+                    <option value="{{ company.company_id }}">
+                        {{ company.company_name }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <label>Password</label>
+        <input type="password" name="password"
+               minlength="8" required>
+
+        <label>Confirm Password</label>
+        <input type="password" name="confirm_password"
+               minlength="8" required>
+
+        <button type="submit">Create Account</button>
+    </form>
+
+    <div class="link">
+        Already have an account?
+        <a href="/login">Login here</a>
+    </div>
+</div>
+
+<script>
+    const role = document.getElementById("role");
+    const experienceField = document.getElementById("experience-field");
+    const companyField = document.getElementById("company-field");
+    const companySelect = document.getElementById("company_id");
+
+    function updateFields() {
+        const isRecruiter = role.value === "recruiter";
+
+        experienceField.classList.toggle("hidden", isRecruiter);
+        companyField.classList.toggle("hidden", !isRecruiter);
+
+        companySelect.disabled = !isRecruiter;
+        companySelect.required = isRecruiter;
+    }
+
+    role.addEventListener("change", updateFields);
+    updateFields();
+</script>
+
+</body>
+</html>
