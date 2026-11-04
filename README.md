@@ -42,3 +42,19 @@ The database connection password is read from the `MYSQL_PASSWORD` environment v
 
 ## Academic Project
 This project demonstrates database design, SQL queries, and integration of a relational database with a web application.
+
+## Documentation
+
+Detailed project documentation is available in the `documentation` folder.
+
+- [ER Diagram](documentation/ER_Diagram.mmd)
+- [Database Schema and 3NF Documentation](documentation/3NF_Schema.md)
+- [SQL Query Gallery](documentation/SQL_Query_Gallery.sql)
+
+The documentation covers:
+- Entity relationships and database design.
+- Eight relational tables and their constraints.
+- First, Second and Third Normal Forms.
+- SQL queries using joins, subqueries, CTEs and transactions.
+- Views, stored procedures and triggers.
+- Indexing and query execution plans.

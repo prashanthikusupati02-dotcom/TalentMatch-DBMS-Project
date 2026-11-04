@@ -1,0 +1,67 @@
+erDiagram
+    COMPANY ||--o{ RECRUITER : employs
+    RECRUITER ||--o{ JOB : posts
+    CANDIDATE ||--o{ APPLICATION : submits
+    JOB ||--o{ APPLICATION : receives
+    CANDIDATE ||--o{ CANDIDATE_SKILL : has
+    SKILL ||--o{ CANDIDATE_SKILL : assigned
+    JOB ||--o{ JOB_SKILL : requires
+    SKILL ||--o{ JOB_SKILL : included
+
+    COMPANY {
+        int company_id PK
+        varchar company_name UK
+        varchar industry
+        varchar location
+    }
+
+    RECRUITER {
+        int recruiter_id PK
+        int company_id FK
+        varchar name
+        varchar email UK
+        varchar password_hash
+    }
+
+    CANDIDATE {
+        int candidate_id PK
+        varchar name
+        varchar email UK
+        varchar password_hash
+        decimal experience_years
+        timestamp created_at
+    }
+
+    JOB {
+        int job_id PK
+        int recruiter_id FK
+        varchar title
+        text description
+        decimal required_experience
+        varchar location
+        date posted_date
+        date expiry_date
+    }
+
+    SKILL {
+        int skill_id PK
+        varchar skill_name UK
+    }
+
+    CANDIDATE_SKILL {
+        int candidate_id PK, FK
+        int skill_id PK, FK
+    }
+
+    JOB_SKILL {
+        int job_id PK, FK
+        int skill_id PK, FK
+    }
+
+    APPLICATION {
+        int application_id PK
+        int candidate_id FK
+        int job_id FK
+        timestamp applied_at
+        varchar status
+    }
