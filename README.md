@@ -1,29 +1,70 @@
-# TalentMatch — Intelligent Job & Talent Matching Platform
+# TalentMatch – Intelligent Job & Talent Matching Platform
 
 ## 1. Project Overview
 
-TalentMatch is a database-driven job-matching platform designed to help candidates find suitable job opportunities based on their skills and experience.
+TalentMatch is a database-driven job and talent matching platform designed to connect candidates with suitable job opportunities based on their skills and experience.
 
-The system connects candidates, recruiters, companies, and job opportunities through a relational database. It compares candidate skills with the skills required for jobs and calculates matching percentages.
+The application uses a relational MySQL database for structured job and candidate information and MongoDB Atlas for candidate notes and semantic job search.
+
+It integrates database management concepts, backend development, authentication, role-based access control, and vector search.
 
 ## 2. Technologies Used
 
+### Backend
 - Python
 - Flask
-- MySQL 8.0
-- HTML
-- SQL
 - MySQL Connector for Python
+- PyMongo
+- PyJWT
+- Werkzeug
+
+### Databases
+- MySQL 8.0
+- MongoDB Atlas
+
+### AI and Semantic Search
+- Sentence Transformers
+- all-MiniLM-L6-v2
+- MongoDB Vector Search
+
+### Frontend
+- HTML
+- CSS
+- JavaScript
+- Flask/Jinja templates
 
 ## 3. Features
 
+### Job and Talent Matching
 - Display available job listings and company information.
 - View candidate-job matching results.
 - Calculate skill matching percentages.
+- Evaluate candidate experience against job requirements.
 - View job applications and their statuses.
-- Retrieve information from a MySQL database through a Flask application.
-- Use database views, stored procedures, and triggers.
-- Maintain data integrity through primary keys, foreign keys, and constraints.
+
+### SQL Database Management
+- Normalized relational database design (3NF).
+- Primary keys, foreign keys, constraints, and indexes.
+- SQL joins, subqueries, CTEs, and transactions.
+- Views, stored procedures, and triggers.
+
+### Authentication and Access Control
+- Candidate and Recruiter registration and login.
+- JWT-based authentication.
+- Password hashing.
+- Role-based access control in the Flask application.
+- MySQL database-level RBAC using dedicated Candidate and Recruiter accounts and roles.
+
+### MongoDB Integration
+- Store candidate notes in MongoDB Atlas.
+- Create, retrieve, update, and delete candidate notes.
+- Maintain job vector embeddings in MongoDB.
+
+### AI-Powered Semantic Job Search
+- Generate job embeddings using Sentence Transformers.
+- Use the all-MiniLM-L6-v2 model to generate 384-dimensional embeddings.
+- Perform semantic similarity search using MongoDB Vector Search.
+- Retrieve jobs based on the meaning of a search query rather than only exact keyword matches.
 
 ## 4. Project Structure
 
@@ -34,6 +75,9 @@ intelligent_job_matching/
 ├── requirements.txt
 ├── README.md
 │
+├── semantic_search.py
+├── generate_job_vectors.py
+│
 ├── templates/
 │   ├── index.html
 │   ├── matches.html
@@ -42,7 +86,8 @@ intelligent_job_matching/
 ├── documentation/
 │   ├── ER_Diagram.mmd
 │   ├── 3NF_Schema.md
-│   └── SQL_Query_Gallery.sql
+│   ├── SQL_Query_Gallery.sql
+│   └── MySQL_RBAC.md
 │
 ├── job_matching_db_application.sql
 ├── job_matching_db_candidate.sql
@@ -59,14 +104,14 @@ intelligent_job_matching/
 └── TalentMatch_Procedure_Trigger.sql
 ```
 
-## 5. Database
+## 5. MySQL Database Design
 
 - Database Name: `job_matching_db`
 - DBMS: MySQL 8.0
 - Number of Base Tables: 8
 - Additional Database Object: `candidate_job_match` view
 
-The database contains the following main entities:
+The database contains eight main entities:
 
 1. Candidate
 2. Recruiter
@@ -77,79 +122,177 @@ The database contains the following main entities:
 7. Job_Skill
 8. Application
 
-The application connects to the MySQL database using Python's MySQL Connector.
+The database implements:
+- Primary and foreign key constraints.
+- Data integrity constraints.
+- Indexes for selected search operations.
+- A candidate-job matching view.
+- Stored procedures and functions.
+- Triggers for application validation.
 
-The database password is read from the `MYSQL_PASSWORD` environment variable instead of being stored directly in the source code.
+## 6. Database-Level RBAC
 
-## 6. Database Objects
+TalentMatch implements MySQL Role-Based Access Control using two database roles:
 
-The project includes:
+- `candidate_role`
+- `recruiter_role`
 
-- **View – `candidate_job_match`:** Calculates candidate-job skill matching percentages.
-- **Stored Procedure – `Calculate_Match_Score`:** Calculates skill matching and checks experience eligibility for a candidate and job.
-- **Trigger – `Before_Application_Insert`:** Prevents applications from being submitted for expired jobs.
-- **Indexes:** Improve selected search and filtering operations.
-- **Constraints:** Maintain data integrity and prevent invalid records.
+Dedicated database accounts are assigned to these roles.
 
-## 7. Documentation
+### Candidate Role
+- View available jobs, companies, and skills.
+- View matching information.
+- Manage permitted candidate and skill records.
+- Submit applications.
 
-Detailed database documentation is available in the `documentation` folder.
+### Recruiter Role
+- View candidate information and skills.
+- Create, update, and delete job postings.
+- Manage job skills.
+- View applications and update application statuses.
 
-- [ER Diagram](documentation/ER_Diagram.mmd)
-- [Database Schema and 3NF Documentation](documentation/3NF_Schema.md)
-- [SQL Query Gallery](documentation/SQL_Query_Gallery.sql)
+The database permissions were tested using separate MySQL accounts. Unauthorized UPDATE operations were successfully denied.
 
-The documentation covers:
+Detailed implementation and test results are available in [MySQL RBAC Documentation](documentation/MySQL_RBAC.md).
 
-- Entity relationships and database design.
-- Relational schema with primary keys and foreign keys.
-- First Normal Form (1NF), Second Normal Form (2NF), and Third Normal Form (3NF).
-- SQL queries using joins, subqueries, CTEs, and transactions.
-- Views, stored procedures, and triggers.
-- Indexing and query execution plans.
+**Note:** These permissions are table-level permissions. Individual candidate record ownership is additionally handled through application-level authorization where implemented.
 
-## 8. How to Run
+## 7. MongoDB Atlas Integration
+
+MongoDB Atlas is used for storing additional application data.
+
+Database: `talentmatch_db`
+
+Collections:
+- `candidate_notes`
+- `job_vectors`
+
+### Candidate Notes
+The application supports CRUD operations:
+- Create candidate notes.
+- Retrieve candidate notes.
+- Update existing notes.
+- Delete notes.
+
+### Job Vectors
+Job descriptions are converted into numerical embeddings and stored in MongoDB.
+
+A vector search index named `job_vector_index` is configured with:
+- Embedding dimensions: 384
+- Similarity metric: cosine
+- Embedding model: all-MiniLM-L6-v2
+
+## 8. Semantic Job Search
+
+TalentMatch includes an AI-powered semantic search feature.
+
+The system uses Sentence Transformers to convert job descriptions and search queries into embeddings.
+
+MongoDB Atlas Vector Search compares these embeddings to identify semantically relevant job opportunities.
+
+API endpoint:
+
+`/api/jobs/semantic-search`
+
+This allows candidates to discover relevant jobs even when their search query does not use exactly the same words as a job description.
+
+## 9. Authentication and API Access
+
+The Flask backend implements:
+- JWT-based authentication.
+- Password hashing.
+- Candidate and Recruiter roles.
+- Protected application routes.
+- Role-based API authorization.
+
+Important API functionality includes:
+
+| API | Purpose |
+|---|---|
+| `/api/me` | Retrieve authenticated user information |
+| `/api/candidate/notes` | Retrieve or create candidate notes |
+| `/api/candidate/notes/<note_id>` | Update or delete a candidate note |
+| `/api/jobs/semantic-search` | Search jobs using semantic similarity |
+
+## 10. How to Run the Project
 
 ### Prerequisites
 
 - Python 3
 - MySQL Server 8.0 or later
+- MongoDB Atlas account
 - MySQL Command Line Client
 
-### Setup Instructions
+### Step 1: Clone the Repository
 
-1. Clone or download this repository.
-2. Open a terminal in the project folder.
-3. Install the required Python packages:
+```bash
+git clone https://github.com/prashanthikusupati02-dotcom/TalentMatch-DBMS-Project.git
+cd TalentMatch-DBMS-Project
+```
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Step 2: Install Dependencies
 
-4. Create the `job_matching_db` database in MySQL.
-5. Execute the provided SQL scripts to create the tables and database objects. Ensure that tables are created before importing dependent data and creating database objects.
-6. Configure the `MYSQL_PASSWORD` environment variable with your MySQL password.
-7. Start the Flask application:
+```bash
+pip install -r requirements.txt
+```
 
-   ```bash
-   python app.py
-   ```
+### Step 3: Configure MySQL
 
-8. Open the following address in your browser:
+Create the `job_matching_db` database and execute the provided SQL scripts in the appropriate dependency order.
 
-   `http://127.0.0.1:5000/`
+Ensure that the tables and required database objects are created before starting the application.
 
-### Notes
+### Step 4: Configure Environment Variables
 
-- MySQL Server must be running before starting the application.
-- The database must be configured before running the Flask application.
-- Install the required Python packages using `requirements.txt`.
-- The SQL scripts are provided for database setup and reference.
+Set the following environment variables:
 
-## 9. Academic Project
+- `MYSQL_PASSWORD`
+- `JWT_SECRET_KEY`
+- `MONGO_URI`
 
-This project demonstrates relational database design, normalization, SQL programming, database object implementation, and integration of a MySQL database with a Flask web application.
+Use your own credentials and secrets. Do not commit passwords, connection strings, or secret keys to GitHub.
 
-## 10. Conclusion
+### Step 5: Configure MongoDB Atlas
 
-TalentMatch provides a structured approach to job and talent matching using relational database concepts. It demonstrates how database design, SQL queries, constraints, stored procedures, triggers, and application integration can be used to support a job-matching platform.
+Configure your MongoDB Atlas connection and ensure that the required collections and vector search index are available.
+
+For semantic search, generate and store the job embeddings using the provided vector generation script.
+
+### Step 6: Start the Flask Application
+
+```bash
+python app.py
+```
+
+### Step 7: Open the Application
+
+Visit:
+
+`http://127.0.0.1:5000/`
+
+## 11. Documentation
+
+Detailed documentation is available in the `documentation` directory.
+
+- [ER Diagram](documentation/ER_Diagram.mmd)
+- [Database Schema and 3NF](documentation/3NF_Schema.md)
+- [SQL Query Gallery](documentation/SQL_Query_Gallery.sql)
+- [MySQL Database-Level RBAC](documentation/MySQL_RBAC.md)
+
+## 12. Academic Project
+
+TalentMatch demonstrates the practical application of:
+
+- Relational database design and normalization.
+- SQL queries and database programming.
+- Database constraints, transactions, views, procedures, and triggers.
+- NoSQL database integration.
+- Backend API development.
+- Authentication and role-based access control.
+- Semantic search using vector embeddings.
+
+## 13. Conclusion
+
+TalentMatch combines relational database management, NoSQL storage, backend development, authentication, and semantic search to provide an integrated job and talent matching platform.
+
+The project demonstrates how database concepts and modern application technologies can be combined to build a practical job-matching system.
