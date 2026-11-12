@@ -449,7 +449,47 @@ def matches(current_user):
         if connection and connection.is_connected():
             connection.close()
 
+# ---------------- CANDIDATE: MY APPLICATIONS ----------------
 
+@app.route("/my-applications")
+@token_required(roles=["candidate"])
+def my_applications(current_user):
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT a.application_id,
+                   j.title AS job_title,
+                   j.location,
+                   a.applied_at,
+                   a.status
+            FROM Application a
+            JOIN Job j ON a.job_id = j.job_id
+            WHERE a.candidate_id = %s
+            ORDER BY a.applied_at DESC
+        """, (current_user["user_id"],))
+
+        records = cursor.fetchall()
+
+        return render_template(
+            "my_applications.html",
+            applications=records
+        )
+
+    except Error:
+        app.logger.exception("Candidate applications database error.")
+        return "Could not load your applications.", 500
+
+    finally:
+        if cursor:
+            cursor.close()
+        if connection and connection.is_connected():
+            connection.close()
 # ---------------- RECRUITER APPLICATIONS ----------------
 
 @app.route("/applications")
@@ -571,7 +611,57 @@ def candidate_notes(current_user):
             "error": "Could not access candidate notes."
         }), 500
 
+# ---------------- RECRUITER: UPDATE APPLICATION STATUS ----------------
 
+@app.route("/applications/<int:application_id>/status", methods=["POST"])
+@token_required(roles=["recruiter"])
+def update_application_status(current_user, application_id):
+
+    allowed_statuses = {
+        "Applied",
+        "Under Review",
+        "Shortlisted",
+        "Rejected"
+    }
+
+    new_status = request.form.get("status", "").strip()
+
+    if new_status not in allowed_statuses:
+        flash("Invalid application status.")
+        return redirect(url_for("applications"))
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            UPDATE Application
+            SET status = %s
+            WHERE application_id = %s
+        """, (new_status, application_id))
+
+        if cursor.rowcount == 0:
+            flash("Application not found or status unchanged.")
+        else:
+            connection.commit()
+            flash("Application status updated successfully.")
+
+        return redirect(url_for("applications"))
+
+    except Error:
+        if connection:
+            connection.rollback()
+        app.logger.exception("Application status update failed.")
+        return "Could not update application status.", 500
+
+    finally:
+        if cursor:
+            cursor.close()
+        if connection and connection.is_connected():
+            connection.close()
 # ---------------- MONGODB: UPDATE / DELETE CANDIDATE NOTE ----------------
 
 @app.route(

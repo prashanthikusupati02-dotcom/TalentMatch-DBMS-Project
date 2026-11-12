@@ -40,7 +40,17 @@
                 <td>{{ item.candidate_name }}</td>
                 <td>{{ item.job_title }}</td>
                 <td>{{ item.applied_at }}</td>
-                <td>{{ item.status }}</td>
+                <td>
+    <form method="POST" action="{{ url_for('update_application_status', application_id=item.application_id) }}">
+        <select name="status">
+            <option value="Applied" {% if item.status == 'Applied' %}selected{% endif %}>Applied</option>
+            <option value="Under Review" {% if item.status == 'Under Review' %}selected{% endif %}>Under Review</option>
+            <option value="Shortlisted" {% if item.status == 'Shortlisted' %}selected{% endif %}>Shortlisted</option>
+            <option value="Rejected" {% if item.status == 'Rejected' %}selected{% endif %}>Rejected</option>
+        </select>
+        <button type="submit">Update</button>
+    </form>
+</td>
             </tr>
             {% endfor %}
         </table>
