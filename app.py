@@ -18,7 +18,7 @@ from flask import (
 
 from mysql.connector import Error
 from werkzeug.security import generate_password_hash, check_password_hash
-
+from flask_cors import CORS
 
 # ---------------- FLASK CONFIGURATION ----------------
 
@@ -29,7 +29,18 @@ app.config["SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 2
-
+CORS(
+    app,
+    resources={
+        r"/api/*": {
+            "origins": [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000"
+            ]
+        }
+    },
+    supports_credentials=True
+)
 
 # ---------------- MONGODB CONFIGURATION ----------------
 
@@ -137,7 +148,53 @@ def token_required(roles=None):
 
     return decorator
 
+# ---------------- API AUTHENTICATION ----------------
 
+def api_token_required(roles=None):
+
+    def decorator(function):
+
+        @wraps(function)
+        def wrapper(*args, **kwargs):
+
+            auth_header = request.headers.get("Authorization", "")
+
+            if auth_header.startswith("Bearer "):
+                token = auth_header.split(" ", 1)[1].strip()
+            else:
+                token = request.cookies.get("access_token")
+
+            if not token:
+                return jsonify({
+                    "error": "Authentication token required."
+                }), 401
+
+            try:
+                data = jwt.decode(
+                    token,
+                    JWT_SECRET_KEY,
+                    algorithms=[JWT_ALGORITHM]
+                )
+
+            except jwt.ExpiredSignatureError:
+                return jsonify({
+                    "error": "Your session has expired. Please log in again."
+                }), 401
+            except jwt.InvalidTokenError:
+                return jsonify({
+                    "error": "Invalid authentication token."
+                }), 401
+
+            if roles and data.get("role") not in roles:
+                return jsonify({
+                    "error": "You do not have permission to access this resource."
+                }), 403
+
+            return function(data, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
 # ---------------- HOME PAGE ----------------
 
 @app.route("/")
@@ -314,6 +371,89 @@ def register():
         if connection and connection.is_connected():
             connection.close()
 
+
+# ---------------- JSON LOGIN API ----------------
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_login():
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON request body is required."}), 400
+
+    email = data.get("email", "")
+    password = data.get("password", "")
+    role = data.get("role")
+
+    if not isinstance(email, str) or not email.strip():
+        return jsonify({"error": "Valid email is required."}), 400
+
+    if not isinstance(password, str) or not password:
+        return jsonify({"error": "Password is required."}), 400
+
+    if role not in ("candidate", "recruiter"):
+        return jsonify({"error": "Invalid account type."}), 400
+
+    table = "Candidate" if role == "candidate" else "Recruiter"
+
+    id_column = (
+        "candidate_id" if role == "candidate"
+        else "recruiter_id"
+    )
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute(
+            f"SELECT {id_column} AS user_id, email, password_hash "
+            f"FROM {table} WHERE email = %s",
+            (email.strip().lower(),)
+        )
+
+        user = cursor.fetchone()
+
+        if not user or not check_password_hash(
+            user["password_hash"], password
+        ):
+            return jsonify({
+                "error": "Invalid email, password or account type."
+            }), 401
+
+        token = generate_token(
+            user["user_id"],
+            user["email"],
+            role
+        )
+
+        return jsonify({
+            "message": "Login successful.",
+            "access_token": token,
+            "token_type": "Bearer",
+            "user": {
+                "user_id": user["user_id"],
+                "email": user["email"],
+                "role": role
+            }
+        }), 200
+
+    except Error:
+        app.logger.exception("JSON login API failed.")
+
+        return jsonify({
+            "error": "Login could not be completed."
+        }), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
 
 # ---------------- USER LOGIN ----------------
 
@@ -533,7 +673,791 @@ def applications(current_user):
         if connection and connection.is_connected():
             connection.close()
 
+# ---------------- CANDIDATE PROFILE API ----------------
 
+@app.route("/api/candidate/profile", methods=["GET", "PUT"])
+@api_token_required(roles=["candidate"])
+def candidate_profile(current_user):
+
+    connection = None
+    cursor = None
+    candidate_id = current_user["user_id"]
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        if request.method == "GET":
+
+            cursor.execute("""
+                SELECT candidate_id, name, email, experience_years
+                FROM Candidate
+                WHERE candidate_id = %s
+            """, (candidate_id,))
+
+            profile = cursor.fetchone()
+
+            if not profile:
+                return jsonify({"error": "Candidate not found."}), 404
+
+            return jsonify({"profile": profile}), 200
+
+        data = request.get_json(silent=True) or {}
+
+        name = data.get("name")
+        email = data.get("email")
+        experience = data.get("experience_years")
+
+        if not isinstance(name, str) or not name.strip():
+            return jsonify({"error": "Valid name is required."}), 400
+
+        if not isinstance(email, str) or not email.strip() or "@" not in email:
+            return jsonify({"error": "Valid email is required."}), 400
+
+        try:
+            experience = float(experience)
+            if not 0 <= experience <= 99.9:
+                raise ValueError
+        except (TypeError, ValueError):
+            return jsonify({
+                "error": "Experience must be between 0 and 99.9."
+            }), 400
+
+        cursor.execute("""
+            UPDATE Candidate
+            SET name = %s, email = %s, experience_years = %s
+            WHERE candidate_id = %s
+        """, (name.strip(), email.strip().lower(), experience, candidate_id))
+
+        connection.commit()
+
+        return jsonify({
+            "message": "Candidate profile updated successfully."
+        }), 200
+
+    except mysql.connector.IntegrityError:
+        if connection:
+            connection.rollback()
+        return jsonify({"error": "This email is already registered."}), 409
+
+    except Error:
+        if connection:
+            connection.rollback()
+        app.logger.exception("Candidate profile API failed.")
+        return jsonify({"error": "Unable to process candidate profile."}), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+        if connection and connection.is_connected():
+            connection.close()
+# ---------------- RECRUITER PROFILE API ----------------
+
+@app.route("/api/recruiter/profile", methods=["GET", "PUT"])
+@api_token_required(roles=["recruiter"])
+def recruiter_profile(current_user):
+
+    connection = None
+    cursor = None
+    recruiter_id = current_user["user_id"]
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        if request.method == "GET":
+
+            cursor.execute("""
+                SELECT
+                    r.recruiter_id,
+                    r.name,
+                    r.email,
+                    c.company_id,
+                    c.company_name,
+                    c.industry,
+                    c.location
+                FROM Recruiter r
+                JOIN Company c ON r.company_id = c.company_id
+                WHERE r.recruiter_id = %s
+            """, (recruiter_id,))
+
+            profile = cursor.fetchone()
+
+            if not profile:
+                return jsonify({"error": "Recruiter not found."}), 404
+
+            return jsonify({"profile": profile}), 200
+
+        data = request.get_json(silent=True) or {}
+
+        name = data.get("name")
+        email = data.get("email")
+
+        if not isinstance(name, str) or not name.strip():
+            return jsonify({"error": "Valid name is required."}), 400
+
+        if not isinstance(email, str) or not email.strip() or "@" not in email:
+            return jsonify({"error": "Valid email is required."}), 400
+
+        cursor.execute("""
+            UPDATE Recruiter
+            SET name = %s, email = %s
+            WHERE recruiter_id = %s
+        """, (name.strip(), email.strip().lower(), recruiter_id))
+
+        connection.commit()
+
+        return jsonify({
+            "message": "Recruiter profile updated successfully."
+        }), 200
+
+    except mysql.connector.IntegrityError:
+        if connection:
+            connection.rollback()
+
+        return jsonify({"error": "This email is already registered."}), 409
+
+    except Error:
+        if connection:
+            connection.rollback()
+
+        app.logger.exception("Recruiter profile API failed.")
+
+        return jsonify({
+            "error": "Unable to process recruiter profile."
+        }), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
+# ---------------- JOB CREATION API ----------------
+
+@app.route("/api/jobs", methods=["POST"])
+@api_token_required(roles=["recruiter"])
+def create_job(current_user):
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON request body is required."}), 400
+
+    title = data.get("title")
+    description = data.get("description", "")
+    location = data.get("location", "")
+    experience = data.get("required_experience", 0)
+
+    if not isinstance(title, str) or not title.strip():
+        return jsonify({"error": "Job title is required."}), 400
+
+    if len(title.strip()) > 150:
+        return jsonify({"error": "Job title must be at most 150 characters."}), 400
+
+    try:
+        experience = float(experience)
+        if not 0 <= experience <= 99.9:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid required experience."}), 400
+
+    posted_date = datetime.date.today()
+
+    try:
+        expiry_date = datetime.date.fromisoformat(data.get("expiry_date", ""))
+    except (TypeError, ValueError):
+        return jsonify({
+            "error": "Provide a valid expiry_date in YYYY-MM-DD format."
+        }), 400
+
+    if expiry_date < posted_date:
+        return jsonify({
+            "error": "Expiry date cannot be before today's date."
+        }), 400
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            INSERT INTO Job (
+                recruiter_id,
+                title,
+                description,
+                required_experience,
+                location,
+                posted_date,
+                expiry_date
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (
+            current_user["user_id"],
+            title.strip(),
+            description,
+            experience,
+            location,
+            posted_date,
+            expiry_date
+        ))
+
+        connection.commit()
+        job_id = cursor.lastrowid
+
+        return jsonify({
+            "message": "Job created successfully.",
+            "job_id": job_id
+        }), 201
+
+    except Error:
+        if connection:
+            connection.rollback()
+
+        app.logger.exception("Job creation API failed.")
+
+        return jsonify({"error": "Unable to create job."}), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
+# ---------------- VIEW JOBS API ----------------
+
+@app.route("/api/jobs", methods=["GET"])
+@api_token_required()
+def get_jobs(current_user):
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT
+                j.job_id,
+                j.title,
+                j.description,
+                j.required_experience,
+                j.location,
+                j.posted_date,
+                j.expiry_date,
+                c.company_name
+            FROM Job j
+            JOIN Recruiter r ON j.recruiter_id = r.recruiter_id
+            JOIN Company c ON r.company_id = c.company_id
+            WHERE j.expiry_date >= CURRENT_DATE
+            ORDER BY j.posted_date DESC
+        """)
+
+        jobs = cursor.fetchall()
+
+        for job in jobs:
+            job["required_experience"] = float(
+                job["required_experience"]
+            )
+            job["posted_date"] = job["posted_date"].isoformat()
+            job["expiry_date"] = job["expiry_date"].isoformat()
+
+        return jsonify({"jobs": jobs}), 200
+
+    except Error:
+        app.logger.exception("View jobs API failed.")
+
+        return jsonify({"error": "Unable to retrieve jobs."}), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
+# ---------------- EDIT JOB API ----------------
+
+@app.route("/api/jobs/<int:job_id>", methods=["PUT"])
+@api_token_required(roles=["recruiter"])
+def update_job(current_user, job_id):
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON request body is required."}), 400
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT *
+            FROM Job
+            WHERE job_id = %s AND recruiter_id = %s
+        """, (job_id, current_user["user_id"]))
+
+        job = cursor.fetchone()
+
+        if not job:
+            return jsonify({
+                "error": "Job not found or access denied."
+            }), 404
+
+        title = data.get("title", job["title"])
+        description = data.get("description", job["description"])
+        location = data.get("location", job["location"])
+        experience = data.get(
+            "required_experience",
+            job["required_experience"]
+        )
+        expiry_value = data.get("expiry_date", job["expiry_date"])
+
+        if not isinstance(title, str) or not title.strip():
+            return jsonify({"error": "Valid job title is required."}), 400
+
+        if len(title.strip()) > 150:
+            return jsonify({"error": "Job title is too long."}), 400
+
+        if description is not None and not isinstance(description, str):
+            return jsonify({"error": "Invalid description."}), 400
+
+        if location is not None and not isinstance(location, str):
+            return jsonify({"error": "Invalid location."}), 400
+
+        if location and len(location) > 150:
+            return jsonify({"error": "Location is too long."}), 400
+
+        try:
+            experience = float(experience)
+            if not 0 <= experience <= 99.9:
+                raise ValueError
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid required experience."}), 400
+
+        try:
+            if isinstance(expiry_value, datetime.date):
+                expiry_date = expiry_value
+            else:
+                expiry_date = datetime.date.fromisoformat(expiry_value)
+        except (TypeError, ValueError):
+            return jsonify({
+                "error": "Expiry date must use YYYY-MM-DD format."
+            }), 400
+
+        if expiry_date < job["posted_date"]:
+            return jsonify({
+                "error": "Expiry date cannot be before the posted date."
+            }), 400
+
+        cursor.execute("""
+            UPDATE Job
+            SET title = %s,
+                description = %s,
+                required_experience = %s,
+                location = %s,
+                expiry_date = %s
+            WHERE job_id = %s AND recruiter_id = %s
+        """, (
+            title.strip(),
+            description,
+            experience,
+            location,
+            expiry_date,
+            job_id,
+            current_user["user_id"]
+        ))
+
+        connection.commit()
+
+        return jsonify({
+            "message": "Job updated successfully.",
+            "job_id": job_id
+        }), 200
+
+    except Error:
+        if connection:
+            connection.rollback()
+
+        app.logger.exception("Job update API failed.")
+
+        return jsonify({"error": "Unable to update job."}), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
+# ---------------- DELETE JOB API ----------------
+
+@app.route("/api/jobs/<int:job_id>", methods=["DELETE"])
+@api_token_required(roles=["recruiter"])
+def delete_job(current_user, job_id):
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            SELECT job_id
+            FROM Job
+            WHERE job_id = %s AND recruiter_id = %s
+        """, (job_id, current_user["user_id"]))
+
+        if not cursor.fetchone():
+            return jsonify({
+                "error": "Job not found or access denied."
+            }), 404
+
+        cursor.execute("""
+            SELECT application_id
+            FROM Application
+            WHERE job_id = %s
+            LIMIT 1
+        """, (job_id,))
+
+        if cursor.fetchone():
+            return jsonify({
+                "error": "Cannot delete this job because candidates have already applied."
+            }), 409
+
+        cursor.execute("""
+            DELETE FROM Job_Skill
+            WHERE job_id = %s
+        """, (job_id,))
+
+        cursor.execute("""
+            DELETE FROM Job
+            WHERE job_id = %s AND recruiter_id = %s
+        """, (job_id, current_user["user_id"]))
+
+        connection.commit()
+
+        return jsonify({
+            "message": "Job deleted successfully.",
+            "job_id": job_id
+        }), 200
+
+    except Error:
+        if connection:
+            connection.rollback()
+
+        app.logger.exception("Job deletion API failed.")
+
+        return jsonify({
+            "error": "Unable to delete job."
+        }), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
+# ---------------- CANDIDATE JOB APPLICATION API ----------------
+
+@app.route("/api/jobs/<int:job_id>/apply", methods=["POST"])
+@api_token_required(roles=["candidate"])
+def apply_for_job(current_user, job_id):
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        # Check whether the job exists and is still active.
+        cursor.execute("""
+            SELECT job_id
+            FROM Job
+            WHERE job_id = %s
+              AND expiry_date >= CURRENT_DATE
+        """, (job_id,))
+
+        if not cursor.fetchone():
+            return jsonify({
+                "error": "Job not found or application deadline has passed."
+            }), 404
+
+        # Prevent duplicate applications.
+        cursor.execute("""
+            SELECT application_id
+            FROM Application
+            WHERE candidate_id = %s AND job_id = %s
+        """, (current_user["user_id"], job_id))
+
+        if cursor.fetchone():
+            return jsonify({
+                "error": "You have already applied for this job."
+            }), 409
+
+        cursor.execute("""
+            INSERT INTO Application (candidate_id, job_id)
+            VALUES (%s, %s)
+        """, (current_user["user_id"], job_id))
+
+        connection.commit()
+
+        application_id = cursor.lastrowid
+
+        return jsonify({
+            "message": "Job application submitted successfully.",
+            "application_id": application_id,
+            "job_id": job_id,
+            "status": "Applied"
+        }), 201
+
+    except mysql.connector.IntegrityError:
+        if connection:
+            connection.rollback()
+
+        return jsonify({
+            "error": "Application could not be submitted. Please check your account and job."
+        }), 409
+
+    except Error:
+        if connection:
+            connection.rollback()
+
+        app.logger.exception("Job application API failed.")
+
+        return jsonify({
+            "error": "Unable to submit job application."
+        }), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
+
+# ---------------- CANDIDATE APPLICATIONS LIST API ----------------
+
+@app.route("/api/candidate/applications", methods=["GET"])
+@api_token_required(roles=["candidate"])
+def candidate_applications_api(current_user):
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT
+                a.application_id,
+                a.job_id,
+                j.title AS job_title,
+                c.company_name,
+                j.location,
+                a.applied_at,
+                a.status
+            FROM Application a
+            JOIN Job j ON a.job_id = j.job_id
+            JOIN Recruiter r ON j.recruiter_id = r.recruiter_id
+            JOIN Company c ON r.company_id = c.company_id
+            WHERE a.candidate_id = %s
+            ORDER BY a.applied_at DESC
+        """, (current_user["user_id"],))
+
+        applications = cursor.fetchall()
+
+        for application in applications:
+            if application["applied_at"]:
+                application["applied_at"] = (
+                    application["applied_at"].isoformat()
+                )
+
+        return jsonify({
+            "applications": applications,
+            "total_applications": len(applications)
+        }), 200
+
+    except Error:
+        app.logger.exception("Candidate applications API failed.")
+
+        return jsonify({
+            "error": "Unable to retrieve candidate applications."
+        }), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
+
+# ---------------- CANDIDATE MATCH RESULTS API ----------------
+
+@app.route("/api/candidate/matches", methods=["GET"])
+@api_token_required(roles=["candidate"])
+def candidate_match_results(current_user):
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT
+                candidate_id,
+                candidate_name,
+                job_id,
+                job_title,
+                total_required_skills,
+                matched_skills,
+                match_percentage
+            FROM candidate_job_match
+            WHERE candidate_id = %s
+            ORDER BY match_percentage DESC
+        """, (current_user["user_id"],))
+
+        matches = cursor.fetchall()
+
+        for match in matches:
+            if match["match_percentage"] is not None:
+                match["match_percentage"] = float(
+                    match["match_percentage"]
+                )
+
+        return jsonify({
+            "matches": matches,
+            "total_matches": len(matches)
+        }), 200
+
+    except Error:
+        app.logger.exception("Candidate match results API failed.")
+
+        return jsonify({
+            "error": "Unable to retrieve candidate match results."
+        }), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
+# ---------------- RECRUITER COMPANY API ----------------
+
+@app.route("/api/recruiter/company", methods=["GET", "PUT"])
+@api_token_required(roles=["recruiter"])
+def recruiter_company(current_user):
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT company_id
+            FROM Recruiter
+            WHERE recruiter_id = %s
+        """, (current_user["user_id"],))
+
+        recruiter = cursor.fetchone()
+
+        if not recruiter:
+            return jsonify({"error": "Recruiter not found."}), 404
+
+        company_id = recruiter["company_id"]
+
+        if request.method == "GET":
+
+            cursor.execute("""
+                SELECT company_id, company_name, industry, location
+                FROM Company
+                WHERE company_id = %s
+            """, (company_id,))
+
+            company = cursor.fetchone()
+
+            if not company:
+                return jsonify({"error": "Company not found."}), 404
+
+            return jsonify({"company": company}), 200
+
+        data = request.get_json(silent=True)
+
+        if not isinstance(data, dict):
+            return jsonify({"error": "JSON request body is required."}), 400
+
+        company_name = data.get("company_name")
+        industry = data.get("industry")
+        location = data.get("location")
+
+        if not isinstance(company_name, str) or not company_name.strip():
+            return jsonify({"error": "Valid company name is required."}), 400
+
+        if len(company_name.strip()) > 150:
+            return jsonify({"error": "Company name is too long."}), 400
+
+        if industry is not None and not isinstance(industry, str):
+            return jsonify({"error": "Invalid industry."}), 400
+
+        if location is not None and not isinstance(location, str):
+            return jsonify({"error": "Invalid location."}), 400
+
+        cursor.execute("""
+            UPDATE Company
+            SET company_name = %s,
+                industry = %s,
+                location = %s
+            WHERE company_id = %s
+        """, (
+            company_name.strip(),
+            industry,
+            location,
+            company_id
+        ))
+
+        connection.commit()
+
+        return jsonify({
+            "message": "Company profile updated successfully.",
+            "company_id": company_id
+        }), 200
+
+    except mysql.connector.IntegrityError:
+        if connection:
+            connection.rollback()
+
+        return jsonify({
+            "error": "This company name is already registered."
+        }), 409
+
+    except Error:
+        if connection:
+            connection.rollback()
+
+        app.logger.exception("Recruiter company API failed.")
+
+        return jsonify({
+            "error": "Unable to process company profile."
+        }), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
 # ---------------- CURRENT USER API ----------------
 
 @app.route("/api/me")
@@ -660,6 +1584,142 @@ def update_application_status(current_user, application_id):
     finally:
         if cursor:
             cursor.close()
+        if connection and connection.is_connected():
+            connection.close()
+
+# ---------------- RECRUITER APPLICATIONS LIST API ----------------
+
+@app.route("/api/recruiter/applications", methods=["GET"])
+@api_token_required(roles=["recruiter"])
+def recruiter_applications_api(current_user):
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT
+                a.application_id,
+                a.candidate_id,
+                c.name AS candidate_name,
+                c.email AS candidate_email,
+                a.job_id,
+                j.title AS job_title,
+                a.applied_at,
+                a.status
+            FROM Application a
+            JOIN Candidate c ON a.candidate_id = c.candidate_id
+            JOIN Job j ON a.job_id = j.job_id
+            WHERE j.recruiter_id = %s
+            ORDER BY a.applied_at DESC
+        """, (current_user["user_id"],))
+
+        applications = cursor.fetchall()
+
+        for application in applications:
+            if application["applied_at"]:
+                application["applied_at"] = (
+                    application["applied_at"].isoformat()
+                )
+
+        return jsonify({
+            "applications": applications,
+            "total_applications": len(applications)
+        }), 200
+
+    except Error:
+        app.logger.exception("Recruiter applications API failed.")
+
+        return jsonify({
+            "error": "Unable to retrieve recruiter applications."
+        }), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
+
+# ---------------- RECRUITER APPLICATION STATUS API ----------------
+
+@app.route(
+    "/api/recruiter/applications/<int:application_id>/status",
+    methods=["PUT"]
+)
+@api_token_required(roles=["recruiter"])
+def api_update_application_status(current_user, application_id):
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON request body is required."}), 400
+
+    new_status = data.get("status")
+
+    allowed_statuses = {
+        "Applied",
+        "Under Review",
+        "Shortlisted",
+        "Rejected"
+    }
+
+    if not isinstance(new_status, str) or new_status.strip() not in allowed_statuses:
+        return jsonify({"error": "Invalid application status."}), 400
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        # Verify that this application belongs to a job
+        # posted by the logged-in recruiter.
+        cursor.execute("""
+            SELECT a.application_id
+            FROM Application a
+            JOIN Job j ON a.job_id = j.job_id
+            WHERE a.application_id = %s
+              AND j.recruiter_id = %s
+        """, (application_id, current_user["user_id"]))
+
+        if not cursor.fetchone():
+            return jsonify({
+                "error": "Application not found or access denied."
+            }), 404
+
+        cursor.execute("""
+            UPDATE Application
+            SET status = %s
+            WHERE application_id = %s
+        """, (new_status.strip(), application_id))
+
+        connection.commit()
+
+        return jsonify({
+            "message": "Application status updated successfully.",
+            "application_id": application_id,
+            "status": new_status.strip()
+        }), 200
+
+    except Error:
+        if connection:
+            connection.rollback()
+
+        app.logger.exception("API application status update failed.")
+
+        return jsonify({
+            "error": "Unable to update application status."
+        }), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+
         if connection and connection.is_connected():
             connection.close()
 # ---------------- MONGODB: UPDATE / DELETE CANDIDATE NOTE ----------------
